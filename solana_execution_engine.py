@@ -1,14 +1,16 @@
 """ Technical implementation for Hummingbot Gateway V2.1.
     MODULE: Solana Sovereign Execution Engine (Ranger Protocol)
-    STATUS: Audit-Ready | Professional Grade
+    INTEGRATION: Risk Manager + PnL Tracker + Drift Adapter
+    STATUS: Production Ready | Fixed State Consistency
 """
 import logging
-from typing import Tuple, Optional
+import time
+from typing import Optional, Dict, Any
 import solana_config as cfg
 from risk_manager import RiskManager
 from drift_basis_adapter import DriftBasisAdapter
+from solana_pnl_tracker import SolanaPnLTracker
 
-# Instituutio-tason lokitus
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -17,73 +19,94 @@ logger = logging.getLogger("SovereignEngine")
 
 class SolanaSovereignEngine:
     EXPOSURE_BUFFER = 0.02  # 2% turvamarginaali
+    MAX_ALLOWED_DRAWDOWN = -5.0  # Hätäpysäytys -5% kohdalla
     DEFAULT_SLIPPAGE = 0.05
+    CYCLE_INTERVAL = 300  # 5 minuuttia syklien välillä
 
-    def __init__(self):
+    def __init__(self, initial_capital: float = 1000000.0):
+        if initial_capital <= 0:
+            raise ValueError(f"Initial capital must be positive, got {initial_capital}")
+        
         self.risk_mgr = RiskManager()
         self.adapter = DriftBasisAdapter()
+        self.tracker = SolanaPnLTracker(initial_capital)
+        
         self.is_active = False
-        self.current_exposure = 0.0
+        self.cycle_count = 0
+        self.last_cycle_time = 0.0
+        
+        logger.info(f"Engine initialized with ${initial_capital:,.2f}")
 
-    def initialize_vault_session(self, initial_capital: float) -> bool:
-        """ Alustaa holvin ja varmistaa riskiprofiilin. """
-        if initial_capital <= 0:
-            logger.error("Invalid capital: must be positive.")
-            return False
-            
+    @property
+    def current_equity(self) -> float:
+        """ Single Source of Truth: Pääoma haetaan aina träkkeriltä. """
+        return self.tracker.current_equity
+
+    def initialize_vault_session(self) -> bool:
+        """ Alustaa istunnon ja suorittaa turvatarkistukset. """
         try:
-            # Ferrari-analyysi: tarkistetaan turvallisuus ennen aloitusta
-            safe, message = self.risk_mgr.check_trade_safety(
-                initial_capital, 0, self.DEFAULT_SLIPPAGE
-            )
-            
-            if safe:
-                self.is_active = True
-                logger.info(f"VAULT ACTIVE: {cfg.DEX_PROTOCOL} | Asset: {cfg.TRADING_ASSET}")
-                return True
-            else:
-                logger.critical(f"SAFETY BREACH: {message}")
+            safe, message = self.risk_mgr.check_trade_safety(self.current_equity, 0, self.DEFAULT_SLIPPAGE)
+            if not safe:
+                logger.critical(f"INITIALIZATION ABORTED: {message}")
                 return False
-        except Exception as e:
-            logger.exception(f"Initialization failed: {str(e)}")
-            return False
-
-    def rebalance_basis_position(self, equity: float) -> bool:
-        """ Suorittaa dynaamisen tasapainotuksen Drift-protokollassa. """
-        if not self.is_active:
-            logger.warning("Engine inactive. Skipping rebalance.")
-            return False
-
-        try:
-            logger.info(f"Analyzing Funding Rates for {cfg.TRADING_ASSET}...")
-            target_size = equity * (1 - self.EXPOSURE_BUFFER)
             
-            # Suoritetaan siirto adapterin kautta
-            result = self.adapter.execute_delta_neutral_open(target_size)
-            self.current_exposure = target_size
-            
-            logger.info(f"Rebalance successful: ${target_size:,.2f} deployed.")
+            self.is_active = True
+            self.last_cycle_time = time.time()
+            logger.info(f"SESSION START: {cfg.DEX_PROTOCOL} | Equity: ${self.current_equity:,.2f}")
+            self.tracker.log_snapshot()
             return True
         except Exception as e:
-            logger.exception(f"Rebalance execution failed: {str(e)}")
-            # Tässä kohtaa instituutio-botti siirtyisi Safe-modeen
+            logger.exception(f"Session initialization failed: {e}")
             return False
 
-    def emergency_shutdown(self) -> bool:
-        """ Pakotettu positioiden sulkeminen ja moottorin pysäytys. """
-        logger.critical("EMERGENCY SHUTDOWN TRIGGERED")
+    def execute_cycle(self, new_equity: Optional[float] = None) -> bool:
+        """ Suorittaa yhden kaupankäyntisyklin: päivitys, analyysi, rebalance. """
+        if not self.is_active:
+            return False
+        
+        self.cycle_count += 1
+        cycle_start = time.time()
+        
+        try:
+            # 1. PÄIVITETÄÄN PÄÄOMA (Fetch from Drift in production)
+            if new_equity is not None:
+                self.tracker.update_equity(new_equity)
+            
+            metrics = self.tracker.calculate_metrics()
+            
+            # 2. RISKIANALYYSI - Drawdown Guardian
+            if metrics['drawdown_pct'] < self.MAX_ALLOWED_DRAWDOWN:
+                logger.error(f"CRITICAL DRAWDOWN: {metrics['drawdown_pct']}%")
+                self.emergency_shutdown()
+                return False
+            
+            # 3. POSITIOIDEN TASAPAINOTUS
+            target_size = self.current_equity * (1 - self.EXPOSURE_BUFFER)
+            self.adapter.execute_delta_neutral_open(target_size)
+            
+            self.last_cycle_time = cycle_start
+            logger.info(f"Cycle {self.cycle_count} Complete | APY: {metrics['estimated_apy']}%")
+            return True
+            
+        except Exception as e:
+            logger.exception(f"Execution cycle failed: {e}")
+            return False
+
+    def emergency_shutdown(self):
+        """ Sulkee kaikki positiot ja lukitsee järjestelmän. """
+        logger.critical("EMERGENCY SHUTDOWN INITIATED")
         try:
             self.adapter.execute_delta_neutral_open(0)
             self.is_active = False
-            self.current_exposure = 0.0
-            logger.info("All positions neutralized. System halted.")
-            return True
+            print(self.tracker.get_summary())
+            logger.info("System locked for safety.")
         except Exception as e:
-            logger.error(f"Shutdown failed! Manual intervention required: {str(e)}")
-            return False
+            logger.exception(f"Shutdown error: {e}")
+            self.is_active = False
 
 if __name__ == "__main__":
-    engine = SolanaSovereignEngine()
-    # Testataan miljoonan dollarin alustusta
-    if engine.initialize_vault_session(1_000_000):
-        engine.rebalance_basis_position(1_000_000)
+    engine = SolanaSovereignEngine(1_000_000.0)
+    if engine.initialize_vault_session():
+        # Simuloitu ajo
+        engine.execute_cycle(1_000_250.0)
+        engine.execute_cycle(1_000_500.0)
