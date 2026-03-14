@@ -2,6 +2,7 @@
     MODULE: Solana Sovereign Engine (PRODUCTION 9.0/10)
 """
 import logging
+import time
 from adaptive_funding_strategy import AdaptiveFundingStrategy
 from risk_manager import RiskManager
 from solana_pnl_tracker_improved import SolanaPnLTracker
@@ -77,3 +78,27 @@ class SolanaSovereignEngine:
             self.consecutive_rpc_failures = 0
 
         return True
+
+    def emergency_shutdown(self, reason: str = "Manual"):
+        """ Hätäpysäytys. Suoritetaan kun Circuit Breaker laukeaa tai käyttäjä keskeyttää. """
+        logger.critical(f"EMERGENCY SHUTDOWN INITIATED. Reason: {reason}")
+        try:
+            self.adapter.close_all_positions()
+            self.current_position_size = 0.0
+            self.is_active = False
+            self.tracker.log_snapshot()
+        except Exception as e:
+            logger.critical(f"Shutdown error: {e}")
+            self.is_active = False
+
+    def get_status(self) -> dict:
+        """ Palauttaa täyden tilannekuvan Daemonia ja raportointia varten. """
+        m = self.tracker.calculate_metrics()
+        return {
+            'equity': m['equity'],
+            'pnl': m['pnl_usd'],
+            'roi_pct': m['roi_pct'],
+            'drawdown_pct': m['drawdown_pct'],
+            'position_size': self.current_position_size,
+            'position_pct': (self.current_position_size / self.current_equity) * 100 if self.current_equity > 0 else 0
+        }
