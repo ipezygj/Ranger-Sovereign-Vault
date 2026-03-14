@@ -1,14 +1,13 @@
 """ Technical implementation for Hummingbot Gateway V2.1.
-    MODULE: Solana Sovereign Engine (Integrated & TWAP Ready)
+    MODULE: Solana Sovereign Engine (PRODUCTION 9.0/10)
 """
 import logging
-from typing import Optional
-
 from adaptive_funding_strategy import AdaptiveFundingStrategy
 from risk_manager import RiskManager
 from solana_pnl_tracker_improved import SolanaPnLTracker
 from drift_basis_adapter import DriftBasisAdapter
 from liquidity_aware_twap import LiquidityAwareTWAP
+from circuit_breakers import CircuitBreakerSystem
 
 logger = logging.getLogger("SovereignEngine")
 
@@ -19,10 +18,12 @@ class SolanaSovereignEngine:
         self.funding_strategy = AdaptiveFundingStrategy(initial_capital)
         self.adapter = DriftBasisAdapter()
         self.twap_executor = LiquidityAwareTWAP(self.adapter)
+        self.circuit_breaker = CircuitBreakerSystem()
         
         self.is_active = False
         self.current_position_size = 0.0
-        self.TWAP_THRESHOLD_USD = 100000.0 # Yli 00k muutokset TWAPilla
+        self.TWAP_THRESHOLD_USD = 100000.0
+        self.consecutive_rpc_failures = 0
 
     @property
     def current_equity(self) -> float:
@@ -37,36 +38,42 @@ class SolanaSovereignEngine:
         if not self.is_active: return False
 
         self.tracker.update_equity(new_equity)
+        metrics = self.tracker.calculate_metrics()
 
+        # 1. CIRCUIT BREAKER
+        breaker_metrics = {
+            'current_drawdown_pct': metrics['drawdown_pct'],
+            'current_funding': current_funding_rate,
+            'consecutive_rpc_failures': self.consecutive_rpc_failures
+        }
+        is_healthy, breaker_reason = self.circuit_breaker.check_system_health(breaker_metrics)
+        
+        if not is_healthy:
+            self.circuit_breaker.trip_breaker(breaker_reason, self)
+            return False
+
+        # 2. RISK MANAGER
         is_safe, reason = self.risk_mgr.check_trade_safety(
             capital=self.current_equity,
             current_exposure=self.current_position_size,
             predicted_funding=current_funding_rate
         )
-
         if not is_safe:
-            logger.warning(f"Safety Halt: {reason}")
-            return False
+            logger.warning(f"Safety Pause: {reason}")
+            return True
 
-        target_position = self.funding_strategy.analyze_and_size(
-            current_rate=current_funding_rate,
-            current_equity=self.current_equity
-        )
-
-        # Suoritetaan position muutos, jos tarpeen
+        # 3. ADAPTIVE SIZING & EXECUTION
+        target_position = self.funding_strategy.analyze_and_size(current_funding_rate, self.current_equity)
+        
         if target_position != self.current_position_size:
             delta = abs(target_position - self.current_position_size)
-            
             if delta > self.TWAP_THRESHOLD_USD:
-                logger.info(f"Large adjustment (${delta:,.0f}). Routing to TWAP Executor.")
-                self.twap_executor.execute_twap_sync(
-                    target_size=target_position, 
-                    current_size=self.current_position_size
-                )
+                logger.info(f"Large Adjustment (${delta:,.0f}) -> Routing to TWAP")
+                self.twap_executor.execute_twap_sync(target_position, self.current_position_size)
             else:
-                logger.debug(f"Small adjustment (${delta:,.0f}). Direct execution.")
                 self.adapter.execute_delta_neutral_open(target_position)
-                
+            
             self.current_position_size = target_position
+            self.consecutive_rpc_failures = 0
 
         return True
