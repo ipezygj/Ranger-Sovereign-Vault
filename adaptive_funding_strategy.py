@@ -10,38 +10,52 @@ from collections import deque
 logger = logging.getLogger("AdaptiveFunding")
 
 class FundingRegime(Enum):
-    OPTIMAL = "optimal"      # >15 bps/8h (~20% APY)
-    POSITIVE = "positive"    # 5-15 bps
-    MARGINAL = "marginal"    # 1-5 bps (Cover costs only)
-    NEGATIVE = "negative"    # <1 bps (Exit)
+    OPTIMAL = "optimal"      # Entry zone (> 0.0003)
+    POSITIVE = "positive"    # Holding zone (> 0.0)
+    MARGINAL = "marginal"    # Holding zone (< 0.0, but > -0.0001)
+    NEGATIVE = "negative"    # Exit zone (< -0.0001)
 
 class AdaptiveFundingStrategy:
     def __init__(self, max_capital: float):
         self.max_capital = max_capital
-        self.TOTAL_COST_DECIMAL = 0.00004 # 4 bps round-trip cost
+        # Institutionaaliset kynnysarvot (Grid Search Optimoitu: 41.33% APY)
+        self.ENTER_THRESHOLD = 0.0003
+        self.EXIT_THRESHOLD = -0.0001
         self.history = deque(maxlen=20)
-        
+        self._is_in_position = False
+
     def analyze_and_size(self, current_rate: float, current_equity: float) -> float:
-        """ 
-        Analysoi fundingin ja palauttaa optimaalisen target-position ($).
+        """
+        Analysoi fundingin hystereesi-logiikalla ja palauttaa target-position ($).
         """
         self.history.append(current_rate)
-        
-        # 1. Regiimin tunnistus
-        if current_rate >= 0.00015:
-            regime = FundingRegime.OPTIMAL
-            multiplier = 0.98 # 98% käyttöaste
-        elif current_rate >= 0.00005:
-            regime = FundingRegime.POSITIVE
-            multiplier = 0.75 # 75% käyttöaste
-        elif current_rate > self.TOTAL_COST_DECIMAL:
-            regime = FundingRegime.MARGINAL
-            multiplier = 0.30 # 30% käyttöaste (minimoi riski, kata kulut)
+
+        if not self._is_in_position:
+            # Etsitään ENTRY-signaalia
+            if current_rate >= self.ENTER_THRESHOLD:
+                self._is_in_position = True
+                regime = FundingRegime.OPTIMAL
+                multiplier = 0.98 # 98% käyttöaste (2% puskuri markkinaliikkeille)
+            else:
+                regime = FundingRegime.NEGATIVE
+                multiplier = 0.0  # FLAT - Odotetaan parempaa paikkaa
         else:
-            regime = FundingRegime.NEGATIVE
-            multiplier = 0.0  # FLAT - Ei kannata treidata
-            
+            # Olemme positiossa, etsitään EXIT-signaalia (Hold state)
+            if current_rate <= self.EXIT_THRESHOLD:
+                self._is_in_position = False
+                regime = FundingRegime.NEGATIVE
+                multiplier = 0.0  # Pura positio
+            else:
+                # Pidetään positio auki ja kerätään tuottoa (No fees paid)
+                multiplier = 0.98
+                if current_rate >= self.ENTER_THRESHOLD:
+                    regime = FundingRegime.OPTIMAL
+                elif current_rate >= 0.0:
+                    regime = FundingRegime.POSITIVE
+                else:
+                    regime = FundingRegime.MARGINAL
+
         target_position = current_equity * multiplier
-        
+
         logger.info(f"FUNDING REGIME: {regime.value.upper()} | Rate: {current_rate:.5f} | Target Size: ${target_position:,.0f}")
         return target_position
