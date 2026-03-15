@@ -18,7 +18,6 @@ class FundingRegime(Enum):
 class AdaptiveFundingStrategy:
     def __init__(self, max_capital: float):
         self.max_capital = max_capital
-        # Institutionaaliset kynnysarvot (Grid Search Optimoitu: 41.33% APY)
         self.ENTER_THRESHOLD = 0.0003
         self.EXIT_THRESHOLD = -0.0001
         self.history = deque(maxlen=20)
@@ -31,22 +30,19 @@ class AdaptiveFundingStrategy:
         self.history.append(current_rate)
 
         if not self._is_in_position:
-            # Etsitään ENTRY-signaalia
             if current_rate >= self.ENTER_THRESHOLD:
                 self._is_in_position = True
                 regime = FundingRegime.OPTIMAL
-                multiplier = 0.98 # 98% käyttöaste (2% puskuri markkinaliikkeille)
+                multiplier = 0.98
             else:
                 regime = FundingRegime.NEGATIVE
-                multiplier = 0.0  # FLAT - Odotetaan parempaa paikkaa
+                multiplier = 0.0
         else:
-            # Olemme positiossa, etsitään EXIT-signaalia (Hold state)
             if current_rate <= self.EXIT_THRESHOLD:
                 self._is_in_position = False
                 regime = FundingRegime.NEGATIVE
-                multiplier = 0.0  # Pura positio
+                multiplier = 0.0
             else:
-                # Pidetään positio auki ja kerätään tuottoa (No fees paid)
                 multiplier = 0.98
                 if current_rate >= self.ENTER_THRESHOLD:
                     regime = FundingRegime.OPTIMAL
