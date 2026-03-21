@@ -1,8 +1,8 @@
 """
-Ranger Sovereign Vault â€” Delta-Neutral Funding Arbitrage Paper Engine v2
+Ranger Sovereign Vault -- Delta-Neutral Funding Arbitrage Paper Engine v2
 =========================================================================
 Simulates cash-and-carry funding-rate arbitrage (spot long + perp short).
-Assumes perfect hedge: PnL is purely f(funding_collected) âˆ’ fees.
+Assumes perfect hedge: PnL is purely f(funding_collected) - fees.
 
 v2 patch notes (anti-whipsaw hardening)
 ----------------------------------------
@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple
 
 import requests
 
-# â”€â”€ Terminal colours â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- Terminal colours --------------------------------------------------------
 G, Y, R, W, C = "\033[92m", "\033[93m", "\033[91m", "\033[0m", "\033[96m"
 
 logging.basicConfig(
@@ -34,27 +34,27 @@ logging.basicConfig(
 logger = logging.getLogger("RangerDaemon")
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================================================
 #  CORE ENGINE
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================================================
 class L2PaperArbitrageEngine:
     """Delta-neutral funding harvester with whipsaw protection."""
 
     def __init__(
         self,
-        # â”€â”€ Capital â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Capital ----------------------------------------------------
         initial_capital: float = 1_000_000.0,
         max_allocation_per_asset: float = 100_000.0,
         max_concurrent_positions: int = 5,
-        # â”€â”€ Fee model (per leg; applied Ã—2 for spot+perp) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Fee model (per leg; applied x2 for spot+perp) -------------
         taker_fee: float = 0.000_35,          # 3.5 bps
-        # â”€â”€ Funding thresholds (8 h decimal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Funding thresholds (8 h decimal) --------------------------
         min_funding_entry: float = 0.001_5,   # 15 bps / 8 h
         min_funding_exit: float = 0.000_5,    #  5 bps / 8 h
-        # â”€â”€ Anti-whipsaw â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Anti-whipsaw ----------------------------------------------
         min_hold_seconds: float = 4 * 3600,   # 4 hours
         emergency_funding_threshold: float = -0.000_5,  # force-close below
-        # â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Persistence -----------------------------------------------
         state_file: str = "vault_state.json",
     ) -> None:
         # Tunables (frozen after init for auditability)
@@ -78,12 +78,12 @@ class L2PaperArbitrageEngine:
 
         self._load_state()
 
-    # â”€â”€ Fee helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Fee helpers --------------------------------------------------------
     def _single_side_fee(self, size: float) -> float:
         """Fee for one side (entry OR exit) across both legs."""
         return size * self.taker_fee * 2
 
-    # â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Persistence --------------------------------------------------------
     def _load_state(self) -> None:
         if not os.path.exists(self.state_file):
             return
@@ -96,13 +96,10 @@ class L2PaperArbitrageEngine:
             self.total_yield_earned = state.get("total_yield_earned", 0.0)
             self.positions = state.get("positions", {})
             self.last_tick = state.get("last_tick", time.time())
-            logger.info(
-                f"{G}Vault restored â€” PnL ${self.pnl:+,.2f} | "
-                f"Fees ${self.total_fees_paid:,.2f} | "
-                f"Yield ${self.total_yield_earned:,.2f}{W}"
-            )
+            msg = "Vault restored -- PnL ${:+,.2f} | Fees ${:,.2f} | Yield ${:,.2f}".format(self.pnl, self.total_fees_paid, self.total_yield_earned)
+            logger.info(G + msg + W)
         except Exception as exc:
-            logger.error(f"{R}State corruption, cold start: {exc}{W}")
+            logger.error(R + "State corruption, cold start: " + str(exc) + W)
 
     def save_state(self, current_time: float) -> None:
         state = {
@@ -113,62 +110,53 @@ class L2PaperArbitrageEngine:
             "positions": self.positions,
             "last_tick": current_time,
         }
-        tmp = f"{self.state_file}.tmp"
+        tmp = self.state_file + ".tmp"
         try:
             with open(tmp, "w") as fh:
                 json.dump(state, fh)
             os.replace(tmp, self.state_file)
         except Exception as exc:
-            logger.error(f"Persist failed: {exc}")
+            logger.error("Persist failed: " + str(exc))
 
-    # â”€â”€ Exit eligibility (anti-whipsaw core) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    def _may_exit(
-        self,
-        pos: dict,
-        current_rate_8h: float,
-        now: float,
-    ) -> Tuple[bool, str]:
+    # -- Exit eligibility (anti-whipsaw core) -------------------------------
+    def _may_exit(self, pos, current_rate_8h, now):
         """Evaluate whether a position is allowed to close.
 
         Priority order:
-        1. EMERGENCY â€” funding deeply negative â†’ always allow.
-        2. BREAKEVEN LOCK â€” yield < round-trip fees â†’ block.
-        3. MIN HOLD â€” age < min_hold_seconds â†’ block.
-        4. NORMAL â€” rate < exit threshold, locks clear â†’ allow.
+        1. EMERGENCY -- funding deeply negative -> always allow.
+        2. BREAKEVEN LOCK -- yield < round-trip fees -> block.
+        3. MIN HOLD -- age < min_hold_seconds -> block.
+        4. NORMAL -- rate < exit threshold, locks clear -> allow.
         """
-        # â‘  Emergency override: heavily negative funding burns capital fast
+        # (1) Emergency override: heavily negative funding burns capital fast
         if current_rate_8h < self.emergency_funding_threshold:
             return True, "EMERGENCY"
 
         age_s = now - pos["entry_time"]
         round_trip_cost = pos["entry_fee"] + self._single_side_fee(pos["size"])
 
-        # â‘¡ Breakeven lock
+        # (2) Breakeven lock
         if pos["earned"] < round_trip_cost:
             shortfall = round_trip_cost - pos["earned"]
-            return False, f"BREAKEVEN_LOCK (${shortfall:.2f} to go)"
+            return False, "BREAKEVEN_LOCK (${:.2f} to go)".format(shortfall)
 
-        # â‘¢ Minimum hold time
+        # (3) Minimum hold time
         if age_s < self.min_hold_seconds:
             remaining_h = (self.min_hold_seconds - age_s) / 3600
-            return False, f"MIN_HOLD ({remaining_h:.1f}h left)"
+            return False, "MIN_HOLD ({:.1f}h left)".format(remaining_h)
 
-        # â‘£ Normal exit signal
+        # (4) Normal exit signal
         if current_rate_8h < self.min_funding_exit:
             return True, "RATE_DECAY"
 
         return False, "RATE_ABOVE_EXIT"
 
-    # â”€â”€ Main tick â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    def update_positions_and_pnl(
-        self,
-        live_rates_decimal: List[Tuple[str, float]],
-        elapsed_seconds: float,
-    ) -> None:
+    # -- Main tick ----------------------------------------------------------
+    def update_positions_and_pnl(self, live_rates_decimal, elapsed_seconds):
         now = time.time()
         rates_dict = dict(live_rates_decimal)
 
-        # â”€â”€ 1. Accrue yield & evaluate exits on existing book â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- 1. Accrue yield & evaluate exits on existing book ----------
         for coin in list(self.positions):
             pos = self.positions[coin]
             rate_8h = rates_dict.get(coin, 0.0)
@@ -189,22 +177,14 @@ class L2PaperArbitrageEngine:
                 self.total_fees_paid += exit_fee
                 hold_h = (now - pos["entry_time"]) / 3600
                 net = pos["earned"] - pos["entry_fee"] - exit_fee
-                logger.info(
-                    f"ðŸ”’ {Y}CLOSE {coin}{W} [{reason}] | "
-                    f"Hold {hold_h:.1f}h | Yield ${pos['earned']:.2f} | "
-                    f"Fees ${pos['entry_fee'] + exit_fee:.2f} | "
-                    f"Net ${net:+.2f}"
-                )
+                logger.info("[X] %sCLOSE %s%s [%s] | Hold %.1fh | Yield $%.2f | Fees $%.2f | Net $%+.2f" % (Y, coin, W, reason, hold_h, pos["earned"], pos["entry_fee"] + exit_fee, net))
                 del self.positions[coin]
 
             elif not may_close and rate_8h < self.min_funding_exit:
-                # Would have exited in v1 â€” log the block for observability
-                logger.info(
-                    f"ðŸ›¡ï¸  {C}WHIPSAW BLOCK {coin}{W} [{reason}] | "
-                    f"Rate {rate_8h * 100:+.4f}%"
-                )
+                # Would have exited in v1 -- log the block for observability
+                logger.info("[S]  %sWHIPSAW BLOCK %s%s [%s] | Rate %+.4f%%" % (C, coin, W, reason, rate_8h * 100))
 
-        # â”€â”€ 2. Scan for new entries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- 2. Scan for new entries ------------------------------------
         active = set(self.positions)
         for coin, rate_8h in live_rates_decimal:
             if len(self.positions) >= self.max_concurrent_positions:
@@ -230,31 +210,28 @@ class L2PaperArbitrageEngine:
                 "entry_fee": entry_fee,
                 "entry_time": now,
             }
-            logger.info(
-                f"âš¡ {G}OPEN  {coin}{W} | Rate {rate_8h * 100:+.4f}% | "
-                f"Fee âˆ’${entry_fee:.2f} | BE ~{be_hours:.1f}h"
-            )
+            logger.info("[+] %sOPEN  %s%s | Rate %+.4f%% | Fee -$%.2f | BE ~%.1fh" % (G, coin, W, rate_8h * 100, entry_fee, be_hours))
 
         self.equity = self.initial_capital + self.pnl
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================================================
 #  DAEMON
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ===========================================================================
 class RangerVaultDaemon:
-    """Top-level process: fetch â†’ tick â†’ persist â†’ sleep."""
+    """Top-level process: fetch -> tick -> persist -> sleep."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         self.engine = L2PaperArbitrageEngine()
         self.shutdown_requested = False
         signal.signal(signal.SIGINT, self._handle_signal)
 
-    def _handle_signal(self, _signum: int, _frame) -> None:
+    def _handle_signal(self, _signum, _frame):
         self.shutdown_requested = True
-        logger.info(f"{R}Shutdown intercepted. Vault locked.{W}")
+        logger.info(R + "Shutdown intercepted. Vault locked." + W)
 
     @staticmethod
-    def fetch_hyperliquid_rates() -> List[Tuple[str, float]]:
+    def fetch_hyperliquid_rates():
         try:
             resp = requests.post(
                 "https://api.hyperliquid.xyz/info",
@@ -266,18 +243,18 @@ class RangerVaultDaemon:
             data = resp.json()
             universe = data[0].get("universe", [])
             ctxs = data[1]
-            rates = [
-                (asset.get("name", "UNKNOWN"), float(ctxs[i].get("funding", 0)) * 8)
-                for i, asset in enumerate(universe)
-            ]
+            rates = []
+            for i, asset in enumerate(universe):
+                funding_8h = float(ctxs[i].get("funding", 0)) * 8
+                rates.append((asset.get("name", "UNKNOWN"), funding_8h))
             rates.sort(key=lambda x: x[1], reverse=True)
             return rates
         except Exception as exc:
-            logger.error(f"L2 Desync: {exc}")
+            logger.error("L2 Desync: " + str(exc))
             return []
 
-    def run(self) -> None:
-        logger.info(f"{G}ðŸ¦… RANGER SOVEREIGN VAULT v2 â€” ANTI-WHIPSAW ENGINE{W}")
+    def run(self):
+        logger.info(G + ">>> RANGER SOVEREIGN VAULT v2 -- ANTI-WHIPSAW ENGINE" + W)
         last_tick = self.engine.last_tick
 
         try:
@@ -291,18 +268,14 @@ class RangerVaultDaemon:
                     self.engine.update_positions_and_pnl(rates, elapsed)
 
                 e = self.engine
-                logger.info(
-                    f"ðŸ“Š VAULT: {G}Eq ${e.equity:,.2f}{W} | "
-                    f"PnL ${e.pnl:+,.2f} | "
-                    f"Yield ${e.total_yield_earned:,.2f} | "
-                    f"Fees âˆ’${e.total_fees_paid:,.2f}"
-                )
+                logger.info("[=] VAULT: %sEq $%s%s | PnL $%+.2f | Yield $%.2f | Fees -$%.2f" % (G, "{:,.2f}".format(e.equity), W, e.pnl, e.total_yield_earned, e.total_fees_paid))
+
                 if e.positions:
                     parts = []
                     for coin, p in e.positions.items():
                         age_h = (now - p["entry_time"]) / 3600
-                        parts.append(f"{coin}: ${p['earned']:.2f} ({age_h:.1f}h)")
-                    logger.info(f"ðŸ¦ BOOK: {C}{' | '.join(parts)}{W}")
+                        parts.append("%s: $%.2f (%.1fh)" % (coin, p["earned"], age_h))
+                    logger.info("[B] BOOK: %s%s%s" % (C, " | ".join(parts), W))
 
                 self.engine.save_state(now)
                 time.sleep(5)
